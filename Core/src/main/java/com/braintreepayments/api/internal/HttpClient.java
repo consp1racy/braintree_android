@@ -2,7 +2,7 @@ package com.braintreepayments.api.internal;
 
 import android.os.Handler;
 import android.os.Looper;
-import android.support.annotation.Nullable;
+import android.support.annotation.NonNull;
 import android.support.annotation.VisibleForTesting;
 
 import com.braintreepayments.api.core.BuildConfig;
@@ -16,23 +16,25 @@ import com.braintreepayments.api.exceptions.UnprocessableEntityException;
 import com.braintreepayments.api.exceptions.UpgradeRequiredException;
 import com.braintreepayments.api.interfaces.HttpResponseCallback;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.zip.GZIPInputStream;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSocketFactory;
+
+import okhttp3.Call;
+import okhttp3.ConnectionSpec;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.OkHttpClient.Builder;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import okhttp3.TlsVersion;
 
 import static java.net.HttpURLConnection.HTTP_ACCEPTED;
 import static java.net.HttpURLConnection.HTTP_CREATED;
@@ -44,9 +46,9 @@ import static java.net.HttpURLConnection.HTTP_UNAVAILABLE;
 
 public class HttpClient<T extends HttpClient> {
 
-    private static final String METHOD_GET = "GET";
-    private static final String METHOD_POST = "POST";
-    private static final String UTF_8 = "UTF-8";
+    private static final MediaType MEDIA_TYPE_APPLICATION_JSON = MediaType.parse("application/json");
+
+    private static OkHttpClient sOkHttpClient = buildDefaultOkHttpClient();
 
     private final Handler mMainThreadHandler;
 
@@ -54,24 +56,45 @@ public class HttpClient<T extends HttpClient> {
     protected final ExecutorService mThreadPool;
 
     private String mUserAgent;
-    private SSLSocketFactory mSSLSocketFactory;
-    private int mConnectTimeout;
-    private int mReadTimeout;
 
     protected String mBaseUrl;
 
-    public HttpClient() {
-        mThreadPool =  Executors.newCachedThreadPool();
-        mMainThreadHandler = new Handler(Looper.getMainLooper());
-        mUserAgent = "braintree/core/" + BuildConfig.VERSION_NAME;
-        mConnectTimeout = (int) TimeUnit.SECONDS.toMillis(30);
-        mReadTimeout = (int) TimeUnit.SECONDS.toMillis(30);
+    private OkHttpClient mOkHttpClient;
+
+    private static OkHttpClient buildDefaultOkHttpClient() {
+        final ConnectionSpec spec = new ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
+                .tlsVersions(TlsVersion.TLS_1_2)
+                .build();
+
+        final List<ConnectionSpec> connectionSpecs = new ArrayList<>();
+        connectionSpecs.add(ConnectionSpec.CLEARTEXT);
+        connectionSpecs.add(spec);
+
+        final Builder builder = new Builder()
+                .connectTimeout(30, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .connectionSpecs(connectionSpecs);
 
         try {
-            mSSLSocketFactory = new TLSSocketFactory();
+            final TLSSocketFactory tlsSocketFactory = new TLSSocketFactory();
+            builder.sslSocketFactory(tlsSocketFactory, tlsSocketFactory.getTrustManager());
         } catch (SSLException e) {
-            mSSLSocketFactory = null;
+            /* No-op. */
         }
+
+        return builder.build();
+    }
+
+    public HttpClient() {
+        mThreadPool = Executors.newCachedThreadPool();
+        mMainThreadHandler = new Handler(Looper.getMainLooper());
+        mUserAgent = "braintree/core/" + BuildConfig.VERSION_NAME;
+        mOkHttpClient = sOkHttpClient;
+    }
+
+    @VisibleForTesting
+    public OkHttpClient getOkHttpClient() {
+        return mOkHttpClient;
     }
 
     /**
@@ -85,18 +108,19 @@ public class HttpClient<T extends HttpClient> {
     }
 
     /**
-     * @param sslSocketFactory the {@link SSLSocketFactory} to use for all https requests.
+     * @param sslSocketFactory the {@link javax.net.ssl.SSLSocketFactory} to use for all https requests.
      * @return {@link HttpClient} for method chaining.
      */
     @SuppressWarnings("unchecked")
-    public T setSSLSocketFactory(SSLSocketFactory sslSocketFactory) {
-        mSSLSocketFactory = sslSocketFactory;
+    public T setSSLSocketFactory(@NonNull final TLSSocketFactory sslSocketFactory) {
+        //noinspection deprecation
+        mOkHttpClient = mOkHttpClient.newBuilder().sslSocketFactory(sslSocketFactory, sslSocketFactory.getTrustManager()).build();
         return (T) this;
     }
 
     /**
-     * @param baseUrl the base url to use when only a path is supplied to
-     * {@link #get(String, HttpResponseCallback)} or {@link #post(String, String, HttpResponseCallback)}
+     * @param baseUrl the base url to use when only a path is supplied to {@link #get(String, HttpResponseCallback)} or
+     * {@link #post(String, String, HttpResponseCallback)}
      * @return {@link HttpClient} for method chaining.
      */
     @SuppressWarnings("unchecked")
@@ -111,7 +135,7 @@ public class HttpClient<T extends HttpClient> {
      */
     @SuppressWarnings("unchecked")
     public T setConnectTimeout(int timeout) {
-        mConnectTimeout = timeout;
+        mOkHttpClient = mOkHttpClient.newBuilder().connectTimeout(timeout, TimeUnit.MILLISECONDS).build();
         return (T) this;
     }
 
@@ -121,7 +145,7 @@ public class HttpClient<T extends HttpClient> {
      */
     @SuppressWarnings("unchecked")
     public T setReadTimeout(int timeout) {
-        mReadTimeout = timeout;
+        mOkHttpClient = mOkHttpClient.newBuilder().readTimeout(timeout, TimeUnit.MILLISECONDS).build();
         return (T) this;
     }
 
@@ -148,17 +172,13 @@ public class HttpClient<T extends HttpClient> {
         mThreadPool.submit(new Runnable() {
             @Override
             public void run() {
-                HttpURLConnection connection = null;
                 try {
-                    connection = init(url);
-                    connection.setRequestMethod(METHOD_GET);
-                    postCallbackOnMainThread(callback, parseResponse(connection));
+                    final Request request = init(url).get().build();
+                    final Call call = mOkHttpClient.newCall(request);
+                    final Response response = call.execute();
+                    postCallbackOnMainThread(callback, parseResponse(response));
                 } catch (Exception e) {
                     postCallbackOnMainThread(callback, e);
-                } finally {
-                    if (connection != null) {
-                        connection.disconnect();
-                    }
                 }
             }
         });
@@ -196,82 +216,58 @@ public class HttpClient<T extends HttpClient> {
      * @param path the path or url to request from the server via HTTP POST
      * @param data the body of the post request
      * @return The HTTP body the of the response
-     *
-     * @see HttpClient#post(String, String, HttpResponseCallback)
      * @throws Exception
+     * @see HttpClient#post(String, String, HttpResponseCallback)
      */
     public String post(String path, String data) throws Exception {
-        HttpURLConnection connection = null;
-        try {
-            if (path.startsWith("http")) {
-                connection = init(path);
-            } else {
-                connection = init(mBaseUrl + path);
-            }
-
-            connection.setRequestMethod(METHOD_POST);
-            connection.setDoOutput(true);
-
-            writeOutputStream(connection.getOutputStream(), data);
-
-            return parseResponse(connection);
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    protected HttpURLConnection init(String url) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-
-        if (connection instanceof HttpsURLConnection) {
-            if (mSSLSocketFactory == null) {
-                throw new SSLException("SSLSocketFactory was not set or failed to initialize");
-            }
-
-            ((HttpsURLConnection) connection).setSSLSocketFactory(mSSLSocketFactory);
+        final String url;
+        if (path.startsWith("http")) {
+            url = path;
+        } else {
+            url = mBaseUrl + path;
         }
 
-        connection.setRequestProperty("Content-Type", "application/json");
-        connection.setRequestProperty("User-Agent", mUserAgent);
-        connection.setRequestProperty("Accept-Language", Locale.getDefault().getLanguage());
-        connection.setRequestProperty("Accept-Encoding", "gzip");
-        connection.setConnectTimeout(mConnectTimeout);
-        connection.setReadTimeout(mReadTimeout);
+        final RequestBody requestBody = RequestBody.create(MEDIA_TYPE_APPLICATION_JSON, data);
 
-        return connection;
+        final Request request = init(url).post(requestBody).build();
+        final Call call = mOkHttpClient.newCall(request);
+        final Response response = call.execute();
+        return parseResponse(response);
     }
 
-    protected void writeOutputStream(OutputStream outputStream, String data) throws IOException {
-        Writer out = new OutputStreamWriter(outputStream, UTF_8);
-        out.write(data, 0, data.length());
-        out.flush();
-        out.close();
+    protected Request.Builder init(String url) throws IOException {
+        if (url.startsWith("https") && mOkHttpClient.sslSocketFactory() == null) {
+            throw new SSLException("SSLSocketFactory was not set or failed to initialize");
+        }
+
+        return new Request.Builder()
+                .url(url)
+                .addHeader("User-Agent", mUserAgent)
+                .addHeader("Accept-Language", Locale.getDefault().getLanguage());
     }
 
-    protected String parseResponse(HttpURLConnection connection) throws Exception {
-        int responseCode = connection.getResponseCode();
-        boolean gzip = "gzip".equals(connection.getContentEncoding());
-        switch(responseCode) {
+    protected String parseResponse(Response response) throws Exception {
+        final int responseCode = response.code();
+        final String responseBody = response.body().string();
+        switch (responseCode) {
             case HTTP_OK: case HTTP_CREATED: case HTTP_ACCEPTED:
-                return readStream(connection.getInputStream(), gzip);
+                return responseBody;
             case HTTP_UNAUTHORIZED:
-                throw new AuthenticationException(readStream(connection.getErrorStream(), gzip));
+                throw new AuthenticationException(responseBody);
             case HTTP_FORBIDDEN:
-                throw new AuthorizationException(readStream(connection.getErrorStream(), gzip));
+                throw new AuthorizationException(responseBody);
             case 422: // HTTP_UNPROCESSABLE_ENTITY
-                throw new UnprocessableEntityException(readStream(connection.getErrorStream(), gzip));
+                throw new UnprocessableEntityException(responseBody);
             case 426: // HTTP_UPGRADE_REQUIRED
-                throw new UpgradeRequiredException(readStream(connection.getErrorStream(), gzip));
+                throw new UpgradeRequiredException(responseBody);
             case 429: // HTTP_TOO_MANY_REQUESTS
                 throw new RateLimitException("You are being rate-limited. Please try again in a few minutes.");
             case HTTP_INTERNAL_ERROR:
-                throw new ServerException(readStream(connection.getErrorStream(), gzip));
+                throw new ServerException(responseBody);
             case HTTP_UNAVAILABLE:
-                throw new DownForMaintenanceException(readStream(connection.getErrorStream(), gzip));
+                throw new DownForMaintenanceException(responseBody);
             default:
-                throw new UnexpectedException(readStream(connection.getErrorStream(), gzip));
+                throw new UnexpectedException(responseBody);
         }
     }
 
@@ -299,30 +295,5 @@ public class HttpClient<T extends HttpClient> {
                 callback.failure(exception);
             }
         });
-    }
-
-    @Nullable
-    private String readStream(InputStream in, boolean gzip) throws IOException {
-        if (in == null) {
-            return null;
-        }
-
-        try {
-            if (gzip) {
-                in = new GZIPInputStream(in);
-            }
-
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buffer = new byte[1024];
-            for (int count; (count = in.read(buffer)) != -1; ) {
-                out.write(buffer, 0, count);
-            }
-
-            return new String(out.toByteArray(), UTF_8);
-        } finally {
-            try {
-                in.close();
-            } catch (IOException ignored) {}
-        }
     }
 }

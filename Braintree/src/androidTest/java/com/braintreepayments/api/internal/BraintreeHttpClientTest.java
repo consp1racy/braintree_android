@@ -17,9 +17,10 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.util.concurrent.CountDownLatch;
+
+import okhttp3.Request;
 
 import static com.braintreepayments.api.internal.BraintreeHttpClientTestUtils.clientWithExpectedResponse;
 import static com.braintreepayments.testutils.FixturesHelper.stringFromFixture;
@@ -51,10 +52,10 @@ public class BraintreeHttpClientTest {
         BraintreeHttpClient httpClient = new BraintreeHttpClient(
                 TokenizationKey.fromString(TOKENIZATION_KEY));
 
-        HttpURLConnection connection = httpClient.init("http://example.com/");
+        Request request = httpClient.init("http://example.com/").build();
 
         assertEquals("braintree/android/" + BuildConfig.VERSION_NAME,
-                connection.getRequestProperty("User-Agent"));
+                request.header("User-Agent"));
     }
 
     @Test(timeout = 1000)
@@ -62,9 +63,9 @@ public class BraintreeHttpClientTest {
         BraintreeHttpClient httpClient = new BraintreeHttpClient(
                 TokenizationKey.fromString(TOKENIZATION_KEY));
 
-        HttpURLConnection connection = httpClient.init("http://example.com/");
+        Request request = httpClient.init("http://example.com/").build();
 
-        assertEquals(TOKENIZATION_KEY, connection.getRequestProperty("Client-Key"));
+        assertEquals(TOKENIZATION_KEY, request.header("Client-Key"));
     }
 
     @Test(timeout = 1000)
@@ -73,9 +74,9 @@ public class BraintreeHttpClientTest {
         BraintreeHttpClient httpClient = new BraintreeHttpClient(
                 Authorization.fromString(stringFromFixture("client_token.json")));
 
-        HttpURLConnection connection = httpClient.init("http://example.com/");
+        Request request = httpClient.init("http://example.com/").build();
 
-        assertNull(connection.getRequestProperty("Client-Key"));
+        assertNull(request.header("Client-Key"));
     }
 
     @Test(timeout = 1000)
@@ -83,7 +84,7 @@ public class BraintreeHttpClientTest {
             throws IOException, InterruptedException, InvalidArgumentException {
         BraintreeHttpClient httpClient = new BraintreeHttpClient(Authorization.fromString(stringFromFixture("client_token.json"))) {
             @Override
-            protected HttpURLConnection init(String url) throws IOException {
+            protected Request.Builder init(String url) throws IOException {
                 assertTrue(url.contains("authorization_fingerprint"));
                 mCountDownLatch.countDown();
 
@@ -102,7 +103,7 @@ public class BraintreeHttpClientTest {
         BraintreeHttpClient httpClient = new BraintreeHttpClient(
                 TokenizationKey.fromString(TOKENIZATION_KEY)) {
             @Override
-            protected HttpURLConnection init(String url) throws IOException {
+            protected Request.Builder init(String url) throws IOException {
                 assertFalse(url.contains("authorizationFingerprint"));
                 mCountDownLatch.countDown();
 

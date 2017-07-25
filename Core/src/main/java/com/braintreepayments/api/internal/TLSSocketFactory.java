@@ -19,34 +19,40 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
+
+import okhttp3.TlsVersion;
+import okhttp3.internal.platform.Platform;
 
 public class TLSSocketFactory extends SSLSocketFactory {
 
-    private SSLSocketFactory mInternalSSLSocketFactory;
+    private final SSLSocketFactory mInternalSSLSocketFactory;
+    private final X509TrustManager mTrustManager;
 
     public TLSSocketFactory() throws SSLException {
         try {
             SSLContext sslContext = SSLContext.getInstance("TLS");
             sslContext.init(null, null, null); // use system security providers
             mInternalSSLSocketFactory = sslContext.getSocketFactory();
+            mTrustManager = Platform.get().trustManager(mInternalSSLSocketFactory);
         } catch (NoSuchAlgorithmException | KeyManagementException e) {
             throw new SSLException(e.getMessage());
         }
     }
 
     /**
-     * @see <a href="http://developer.android.com/training/articles/security-ssl.html#UnknownCa">Android Documentation</a>
+     * @see <a href="http://developer.android.com/training/articles/security-ssl.html#UnknownCa">Android
+     * Documentation</a>
      */
     public TLSSocketFactory(InputStream certificateStream) throws SSLException {
         try {
-            KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
+            final KeyStore keyStore = KeyStore.getInstance(KeyStore.getDefaultType());
             keyStore.load(null, null);
 
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-
-            Collection<? extends Certificate> certificates =
-                    cf.generateCertificates(certificateStream);
+            final CertificateFactory cf = CertificateFactory.getInstance("X.509");
+            final Collection<? extends Certificate> certificates = cf.generateCertificates(certificateStream);
             for (Certificate cert : certificates) {
                 if (cert instanceof X509Certificate) {
                     String subject = ((X509Certificate) cert).getSubjectDN().getName();
@@ -54,20 +60,31 @@ public class TLSSocketFactory extends SSLSocketFactory {
                 }
             }
 
-            TrustManagerFactory tmf = TrustManagerFactory.getInstance(
-                    TrustManagerFactory.getDefaultAlgorithm());
+            final TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(keyStore);
+            final TrustManager[] trustManagers = tmf.getTrustManagers();
+            if (trustManagers.length != 1 || !(trustManagers[0] instanceof X509TrustManager)) {
+                throw new IllegalStateException("Unexpected default trust managers:" + Arrays.toString(trustManagers));
+            }
 
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(null, tmf.getTrustManagers(), null);
+            final SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustManagers, null);
+
             mInternalSSLSocketFactory = sslContext.getSocketFactory();
+            mTrustManager = (X509TrustManager) trustManagers[0];
         } catch (Exception e) {
             throw new SSLException(e.getMessage());
         } finally {
             try {
                 certificateStream.close();
-            } catch (IOException | NullPointerException ignored) {}
+            } catch (IOException | NullPointerException ignored) {
+                /* No-op. */
+            }
         }
+    }
+
+    public X509TrustManager getTrustManager() {
+        return mTrustManager;
     }
 
     @Override
@@ -114,7 +131,7 @@ public class TLSSocketFactory extends SSLSocketFactory {
         if (socket instanceof SSLSocket) {
             ArrayList<String> supportedProtocols =
                     new ArrayList<>(Arrays.asList(((SSLSocket) socket).getSupportedProtocols()));
-            supportedProtocols.retainAll(Collections.singletonList("TLSv1.2"));
+            supportedProtocols.retainAll(Collections.singletonList(TlsVersion.TLS_1_2.javaName()));
 
             ((SSLSocket) socket).setEnabledProtocols(supportedProtocols.toArray(new String[supportedProtocols.size()]));
         }

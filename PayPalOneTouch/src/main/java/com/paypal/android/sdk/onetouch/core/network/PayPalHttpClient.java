@@ -8,10 +8,11 @@ import com.paypal.android.sdk.onetouch.core.BuildConfig;
 import com.paypal.android.sdk.onetouch.core.base.DeviceInspector;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
 import java.util.concurrent.TimeUnit;
 
 import javax.net.ssl.SSLException;
+
+import okhttp3.Request;
 
 public class PayPalHttpClient extends HttpClient<PayPalHttpClient> {
 
@@ -21,15 +22,16 @@ public class PayPalHttpClient extends HttpClient<PayPalHttpClient> {
         setConnectTimeout((int) TimeUnit.SECONDS.toMillis(90));
 
         try {
-            setSSLSocketFactory(new TLSSocketFactory(PayPalCertificate.getCertInputStream()));
+            final TLSSocketFactory sslSocketFactory = new TLSSocketFactory(PayPalCertificate.getCertInputStream());
+            setSSLSocketFactory(sslSocketFactory);
         } catch (SSLException e) {
-            setSSLSocketFactory(null);
+            /* No-op. */
         }
     }
 
     @VisibleForTesting
     @Override
-    protected HttpURLConnection init(String url) throws IOException {
+    protected Request.Builder init(String url) throws IOException {
         return super.init(url);
     }
 }

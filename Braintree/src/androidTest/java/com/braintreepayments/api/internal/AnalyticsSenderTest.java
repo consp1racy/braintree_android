@@ -9,8 +9,9 @@ import com.braintreepayments.api.test.TestClientTokenBuilder;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
-import java.net.HttpURLConnection;
 import java.util.concurrent.CountDownLatch;
+
+import okhttp3.Response;
 
 import static android.support.test.InstrumentationRegistry.getTargetContext;
 import static junit.framework.Assert.assertEquals;
@@ -29,9 +30,9 @@ public class AnalyticsSenderTest {
 
         BraintreeHttpClient httpClient = new BraintreeHttpClient(Authorization.fromString(authorization)) {
             @Override
-            protected String parseResponse(HttpURLConnection connection) throws Exception {
-                if (connection.getURL().toString().equals(configuration.getAnalytics().getUrl())) {
-                    assertEquals(200, connection.getResponseCode());
+            protected String parseResponse(Response response) throws Exception {
+                if (response.request().url().toString().equals(configuration.getAnalytics().getUrl())) {
+                    assertEquals(200, response.code());
                     latch.countDown();
                 }
                 return "";

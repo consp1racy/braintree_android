@@ -8,7 +8,8 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
+
+import okhttp3.Request;
 
 import static com.paypal.android.sdk.onetouch.core.base.DeviceInspector.getDeviceName;
 import static junit.framework.Assert.assertEquals;
@@ -20,19 +21,17 @@ public class PayPalHttpClientUnitTest {
     public void setsUserAgent() throws IOException {
         PayPalHttpClient httpClient = new PayPalHttpClient();
 
-        HttpURLConnection connection = httpClient.init("http://example.com");
+        Request request = httpClient.init("http://example.com").build();
 
         String userAgent = String.format("PayPalSDK/PayPalOneTouch-Android %s (%s; %s; %s)", BuildConfig.VERSION_NAME,
                 DeviceInspector.getOs(), getDeviceName(), BuildConfig.DEBUG ? "debug;" : "");
-        assertEquals(userAgent, connection.getRequestProperty("User-Agent"));
+        assertEquals(userAgent, request.header("User-Agent"));
     }
 
     @Test
     public void setsConnectTimeout() throws IOException {
         PayPalHttpClient httpClient = new PayPalHttpClient();
 
-        HttpURLConnection connection = httpClient.init("http://example.com");
-
-        assertEquals(90000, connection.getConnectTimeout());
+        assertEquals(90000, httpClient.getOkHttpClient().connectTimeoutMillis());
     }
 }

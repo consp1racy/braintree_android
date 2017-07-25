@@ -15,9 +15,11 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
-import java.net.HttpURLConnection;
 
 import javax.net.ssl.SSLException;
+
+import okhttp3.Request;
+import okhttp3.Response;
 
 /**
  * Network request class that handles Braintree request specifics and threading.
@@ -33,10 +35,11 @@ public class BraintreeHttpClient extends HttpClient {
         setUserAgent(getUserAgent());
 
         try {
-            setSSLSocketFactory(
-                    new TLSSocketFactory(BraintreeGatewayCertificate.getCertInputStream()));
+            final TLSSocketFactory sslSocketFactory =
+                    new TLSSocketFactory(BraintreeGatewayCertificate.getCertInputStream());
+            setSSLSocketFactory(sslSocketFactory);
         } catch (SSLException e) {
-            setSSLSocketFactory(null);
+            /* No-op. */
         }
 
         mAuthorization = authorization;
@@ -106,11 +109,11 @@ public class BraintreeHttpClient extends HttpClient {
 
     /**
      * Makes a synchronous HTTP POST request to Braintree using the base url, path, and authorization provided.
-     * @see BraintreeHttpClient#post(String, String, HttpResponseCallback)
      *
      * @param path the path or url to request from the server via HTTP POST
      * @param data the body of the post request
      * @return the HTTP response body
+     * @see BraintreeHttpClient#post(String, String, HttpResponseCallback)
      */
     public String post(String path, String data) throws Exception {
         if (mAuthorization instanceof ClientToken) {
@@ -122,20 +125,18 @@ public class BraintreeHttpClient extends HttpClient {
     }
 
     @Override
-    protected HttpURLConnection init(String url) throws IOException {
-        HttpURLConnection connection = super.init(url);
-
+    protected Request.Builder init(String url) throws IOException {
+        final Request.Builder builder = super.init(url);
         if (mAuthorization instanceof TokenizationKey) {
-            connection.setRequestProperty(TOKENIZATION_KEY_HEADER_KEY, mAuthorization.toString());
+            builder.addHeader(TOKENIZATION_KEY_HEADER_KEY, mAuthorization.toString());
         }
-
-        return connection;
+        return builder;
     }
 
     @Override
-    protected String parseResponse(HttpURLConnection connection) throws Exception {
+    protected String parseResponse(Response response) throws Exception {
         try {
-            return super.parseResponse(connection);
+            return super.parseResponse(response);
         } catch (AuthorizationException | UnprocessableEntityException e) {
             if (e instanceof AuthorizationException) {
                 String errorMessage = new ErrorWithResponse(403, e.getMessage()).getMessage();
