@@ -4,6 +4,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.support.annotation.NonNull;
 import android.support.annotation.VisibleForTesting;
+import android.util.Log;
 
 import com.braintreepayments.api.core.BuildConfig;
 import com.braintreepayments.api.exceptions.AuthenticationException;
@@ -35,6 +36,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.TlsVersion;
+import okhttp3.logging.HttpLoggingInterceptor;
+import okhttp3.logging.HttpLoggingInterceptor.Level;
 
 import static java.net.HttpURLConnection.HTTP_ACCEPTED;
 import static java.net.HttpURLConnection.HTTP_CREATED;
@@ -45,6 +48,7 @@ import static java.net.HttpURLConnection.HTTP_UNAUTHORIZED;
 import static java.net.HttpURLConnection.HTTP_UNAVAILABLE;
 
 public class HttpClient<T extends HttpClient> {
+    private static final boolean DEBUG = true;
 
     private static final MediaType MEDIA_TYPE_APPLICATION_JSON = MediaType.parse("application/json");
 
@@ -82,6 +86,28 @@ public class HttpClient<T extends HttpClient> {
             /* No-op. */
         }
 
+        if (DEBUG) {
+            final HttpLoggingInterceptor networkLoggingInterceptor =
+                    new HttpLoggingInterceptor(new HttpLoggingInterceptor.Logger() {
+                        @Override
+                        public void log(String message) {
+                            Log.d("NET-Braintree-OkHttp", message);
+                        }
+                    });
+            networkLoggingInterceptor.setLevel(Level.BODY);
+            builder.addNetworkInterceptor(networkLoggingInterceptor);
+
+            final HttpLoggingInterceptor loggingInterceptor =
+                    new HttpLoggingInterceptor(new HttpLoggingInterceptor.Logger() {
+                        @Override
+                        public void log(String message) {
+                            Log.d("APP-Braintree-OkHttp", message);
+                        }
+                    });
+            loggingInterceptor.setLevel(Level.BODY);
+            builder.addInterceptor(loggingInterceptor);
+        }
+
         return builder.build();
     }
 
@@ -114,7 +140,9 @@ public class HttpClient<T extends HttpClient> {
     @SuppressWarnings("unchecked")
     public T setSSLSocketFactory(@NonNull final TLSSocketFactory sslSocketFactory) {
         //noinspection deprecation
-        mOkHttpClient = mOkHttpClient.newBuilder().sslSocketFactory(sslSocketFactory, sslSocketFactory.getTrustManager()).build();
+        mOkHttpClient =
+                mOkHttpClient.newBuilder().sslSocketFactory(sslSocketFactory, sslSocketFactory.getTrustManager())
+                        .build();
         return (T) this;
     }
 
